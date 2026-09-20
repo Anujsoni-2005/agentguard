@@ -135,9 +135,28 @@ class DecisionPolicy(BaseModel):
     transient_http_statuses: List[int] = Field(default=[408, 425, 429, 500, 502, 503, 504], json_schema_extra={"merge": "base_only"})
     replan_on_warn_codes: List[str] = Field(default=["ANM-001","ANM-002","ANM-004","ANM-005"], json_schema_extra={"merge": "union"})
 
-# --- Stubs for Phase 5 (FS), Phase 9 (GUI), Phase 6 (Anomaly, Breaker), Phase 7 (Progress) ---
+# --- Phase 5 (FS), Phase 9 (GUI), Phase 6 (Anomaly, Breaker), Phase 7 (Progress) ---
 class FsPolicy(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    workspace_root: str = "/workspace"
+    read_allow_paths: List[str] = Field(default_factory=list)
+    sensitive_path_globs: List[str] = Field(default_factory=list)
+    deny_paths: List[str] = [".agentguard.yaml","**/.agentguard.yaml","policies/**","**/agentguard*.yaml","**/.agentguard/**"]
+    protected_path_globs: List[str] = [".git/hooks/**",".git/config",".github/workflows/**",".gitlab-ci.yml",".circleci/**",
+                                       "Jenkinsfile",".pre-commit-config.yaml",".husky/**","**/authorized_keys"]
+    executable_ext: List[str] = [".sh",".bash",".py",".js",".mjs",".rb",".pl",".php",".ps1",".bat"]
+    max_read_bytes: int = 1_048_576
+    max_write_bytes: int = 5_242_880
+    max_workspace_growth_bytes: int = 209_715_200
+    max_list_entries: int = 1000
+    max_path_len: int = 4096
+    max_component_len: int = 255
+    max_depth: int = 32
+    mass_delete_threshold_files: int = 50
+    wipe_shrink_ratio: float = 0.8
+    copy_exclude_globs: List[str] = Field(default_factory=list)
+    auto_promote_safe: bool = False
+    honeytokens_enabled: bool = True
+    scan_script_content: bool = True
 
 class GuiPolicy(BaseModel):
     model_config = ConfigDict(extra="allow")
