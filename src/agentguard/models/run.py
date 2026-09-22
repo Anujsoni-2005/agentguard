@@ -33,11 +33,11 @@ class Budgets(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    max_steps: int = Field(default=100, ge=1, le=10_000)
-    max_wall_seconds: int = Field(default=900, ge=10, le=86_400)
-    max_tokens: int | None = None
-    max_cost_usd: float | None = None
-    max_egress_bytes: int = 5 * 1024 * 1024
+    max_steps: int = Field(default=100, ge=1, le=10_000, json_schema_extra={"merge": "min"})
+    max_wall_seconds: int = Field(default=900, ge=10, le=86_400, json_schema_extra={"merge": "min"})
+    max_tokens: int | None = Field(default=None, json_schema_extra={"merge": "min"})
+    max_cost_usd: float | None = Field(default=None, json_schema_extra={"merge": "min"})
+    max_egress_bytes: int = Field(default=5_242_880, json_schema_extra={"merge": "min"})
 
 
 class TaskSpec(BaseModel):
@@ -48,6 +48,7 @@ class TaskSpec(BaseModel):
     objective: str = Field(min_length=5, max_length=2000)
     success_criteria: list[str] = Field(default=[], max_length=20)
     milestones: list[Milestone] = Field(default=[], max_length=30)
+    known_paths: list[str] = Field(default_factory=list, max_length=200)
     workspace_root: str = "/workspace"
     workspace_host_path: str | None = None
     policy_id: str = "default"
@@ -109,3 +110,5 @@ class Run(BaseModel):
     ws_epoch: int = 0                              # §B6
     outcome_verified: bool | None = None
     pending_advisories_json: str = "[]"
+    flags: dict[str, Any] = {}                     # §8 (e.g. compromise_suspected)
+    breaker_json: str | None = None                # §8.5

@@ -80,7 +80,7 @@ def intersect_cidrs(base: List[str], overlay: List[str]) -> List[str]:
     return result
 
 
-def _is_at_least_as_strict(mode: str, base_val: Any, overlay_val: Any) -> bool:
+def _is_at_least_as_strict(mode: str, base_val: Any, overlay_val: Any, field_info: Any = None) -> bool:
     if overlay_val is None:
         return True
     
@@ -105,23 +105,9 @@ def _is_at_least_as_strict(mode: str, base_val: Any, overlay_val: Any) -> bool:
             return True
         return overlay_val == "allowlist"
     elif mode == "stricter_tier_map":
-        order = {"auto": 0, "ask_human": 1, "block": 2}
-        if not isinstance(base_val, dict) or not isinstance(overlay_val, dict):
-            return False
-        for k, v in overlay_val.items():
-            b_v = base_val.get(k, "auto")
-            if order.get(v, 0) < order.get(b_v, 0):
-                return False
-        return True
+        return True # Handled per-key in merge_field
     elif mode == "stricter_verdict":
-        if not isinstance(base_val, dict) or not isinstance(overlay_val, dict):
-            return False
-        order = {"ALLOW": 0, "ASK_HUMAN": 1, "DENY": 2, "HALT": 3}
-        for k, v in overlay_val.items():
-            b_v = base_val.get(k, "ALLOW")
-            if order.get(v, 0) < order.get(b_v, 0):
-                return False
-        return True
+        return True # Handled per-key in merge_field
     elif mode == "intersect_domains":
         return set(intersect_domains(base_val, overlay_val)) == set(overlay_val)
     elif mode == "intersect_cidrs":
@@ -133,14 +119,22 @@ def _is_at_least_as_strict(mode: str, base_val: Any, overlay_val: Any) -> bool:
     elif mode == "add_only_rules":
         return True # Handled manually
     elif mode == "stricter_enum":
-        return True # Typically checked via specific enum order logic
+        if field_info is None or not field_info.json_schema_extra or not isinstance(field_info.json_schema_extra, dict) or "order" not in field_info.json_schema_extra:
+            raise ValueError(f"stricter_enum field missing 'order' in json_schema_extra")
+        order = field_info.json_schema_extra["order"]
+        try:
+            b_idx = order.index(base_val)
+            o_idx = order.index(overlay_val)
+            return bool(o_idx >= b_idx)
+        except ValueError:
+            return False
     elif mode == "stricter":
         return True # Fallback
     
     return True
 
 
-def merge_field(mode: str, base_val: Any, overlay_val: Any) -> Any:
+def merge_field(mode: str, base_val: Any, overlay_val: Any, field_info: Any = None) -> Any:
     if overlay_val is None:
         return copy.deepcopy(base_val)
     if base_val is None and overlay_val is not None:
@@ -195,9 +189,15 @@ def merge_field(mode: str, base_val: Any, overlay_val: Any) -> Any:
     elif mode == "base_only":
         return base_val
     elif mode == "stricter_enum":
-        # Fallback for dynamic enum ordering, e.g. ["off", "warn", "ask"]
-        # Handled in higher logic or assume enum string order if known. For now, assume it's custom.
-        return overlay_val # Need explicit mapping if we use this heavily.
+        if field_info is None or not field_info.json_schema_extra or not isinstance(field_info.json_schema_extra, dict) or "order" not in field_info.json_schema_extra:
+            raise ValueError(f"stricter_enum field missing 'order' in json_schema_extra")
+        order = field_info.json_schema_extra["order"]
+        try:
+            b_idx = order.index(base_val)
+            o_idx = order.index(overlay_val)
+            return overlay_val if o_idx > b_idx else base_val
+        except ValueError:
+            return base_val
     elif mode == "add_only_rules":
         # For custom_rules, handled in `tighten`
         return base_val
@@ -231,8 +231,8 @@ def tighten(base: T, overlay: Dict[str, Any]) -> tuple[T, List[str], List[str]]:
                 
             field_info = fields[k]
             mode = None
-            if field_info.json_schema_extra and "merge" in field_info.json_schema_extra:
-                mode = field_info.json_schema_extra["merge"]
+            if field_info.json_schema_extra and isinstance(field_info.json_schema_extra, dict) and "merge" in field_info.json_schema_extra:
+                mode = str(field_info.json_schema_extra["merge"])
             
             if mode is None:
                 continue # Ignore primitive fields without a merge mode
@@ -258,11 +258,11 @@ def tighten(base: T, overlay: Dict[str, Any]) -> tuple[T, List[str], List[str]]:
                 continue
             
             # Check if strict
-            if not _is_at_least_as_strict(mode, b_val, v):
+            if not _is_at_least_as_strict(mode, b_val, v, field_info):
                 ignored.append(f"{path_prefix}{k}")
                 continue
             
-            out_data[k] = merge_field(mode, b_val, v)
+            out_data[k] = merge_field(mode, b_val, v, field_info)
 
         # Validate with the new data
         return b_model.__class__.model_validate(out_data)

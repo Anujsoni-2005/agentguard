@@ -77,6 +77,11 @@ async def create_run(
 
     new_run_id = gen_run_id()
     now = utcnow()
+    
+    # 13.5 Admission Control
+    if len(request.app.state.run_locks) >= settings.max_concurrent_runs:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=429, detail="CAPACITY_EXCEEDED")
 
     # Resolve human_available
     human_available = body.task.human_available

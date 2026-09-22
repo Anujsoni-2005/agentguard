@@ -68,6 +68,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # ── In-memory run cache (§13.4.3) ───────────────────────────────
     app.state.run_cache: dict[str, object] = {}
 
+    # ── Process Pool for Large Bodies (§13.5) ───────────────────────
+    import concurrent.futures
+    app.state.process_pool = concurrent.futures.ProcessPoolExecutor(max_workers=settings.scan_workers)
+
     # ── Approval expiry background task (§1.5.5) ────────────────────
     async def _expire_loop() -> None:
         while True:
@@ -95,6 +99,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await expiry_task
     except asyncio.CancelledError:
         pass
+    app.state.process_pool.shutdown(wait=False)
     ledger.close()
     await db.close()
     logger.info("hub.stopped")
