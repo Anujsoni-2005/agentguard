@@ -1,0 +1,20 @@
+# CodeRabbit Configuration File
+# https://coderabbit.ai/docs
+language: "en-US"
+early_access: false
+reviews:
+  profile: "chill"
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: true
+  review_status: true
+  collapse_walkthrough: false
+  path_instructions:
+    - path: "**/*.py"
+      instructions: |
+        - Follow strict Python typing guidelines.
+        - Ensure Pydantic v2 models are constructed correctly.
+        - Security is paramount in AgentGuard, so fail-closed logic is mandatory.
+        - Check for unused imports and missing type hints.
+chat:
+  auto_reply: true

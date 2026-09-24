@@ -1,0 +1,64 @@
+# §4 Golden tests
+- id: 1
+  action: fs.read
+  params:
+    path: /workspace/src/a.py
+  expected_verdict: ALLOW
+- id: 2
+  action: fs.read
+  params:
+    path: /workspace/../etc/passwd
+  expected_verdict: DENY
+  expected_rule: FS-002
+- id: 3
+  action: fs.read
+  params:
+    path: /etc/passwd
+  expected_verdict: DENY
+  expected_rule: FS-002
+- id: 4
+  action: fs.read
+  params:
+    path: /workspace/.env
+  expected_verdict: ASK_HUMAN
+  expected_rule: FS-010
+- id: 5
+  action: fs.read
+  params:
+    path: /workspace/.ssh/id_rsa
+  expected_verdict: ASK_HUMAN
+  expected_rule: FS-010
+- id: 6
+  action: fs.read
+  params:
+    path: /workspace/.env.backup
+  expected_verdict: DENY
+  expected_rule: FS-012
+- id: 7
+  action: fs.write
+  params:
+    path: /workspace/src/a.py
+    content: "print('hello')"
+  expected_verdict: ALLOW
+- id: 8
+  action: fs.write
+  params:
+    path: /workspace/.github/workflows/ci.yml
+    content: ""
+  expected_verdict: ASK_HUMAN
+  expected_rule: FS-020
+- id: 9
+  action: fs.write
+  params:
+    path: /workspace/.agentguard.yaml
+    content: ""
+  expected_verdict: DENY
+  expected_rule: FS-005
+- id: 22
+  action: fs.write
+  params:
+    path: /workspace/leak/foo
+  facts:
+    symlink_escape: true
+  expected_verdict: DENY
+  expected_rule: FS-003

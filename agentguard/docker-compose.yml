@@ -1,0 +1,57 @@
+services:
+  hub:
+    build:
+      context: .
+      dockerfile: hub.Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      - ./data:/data
+    environment:
+      - AG_ENV=dev
+      - AG_DEV_MODE=true
+      - AG_EVAL_MODE=true
+      - AG_AGENT_TOKEN=test
+      - AG_ADMIN_TOKEN=test
+      - AG_INTERNAL_TOKEN=test
+      - AG_SERVER_SECRET=00000000000000000000000000000000
+      - AG_MAX_CONCURRENT_RUNS=1000
+      - AG_DATA_DIR=/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks:
+      - agentguard_sandbox
+      - agentguard_eval
+
+  proxy:
+    image: mitmproxy/mitmproxy:latest
+    entrypoint: ""
+    command: >
+      sh -c "pip install -e /app && mitmdump -s /app/src/agentguard/proxy/addon.py --set block_global=false"
+    ports:
+      - "8080:8080"
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONPATH=/app/src
+      - AG_EVAL_MODE=true
+      - AG_DEV_MODE=true
+      - AG_ENV=dev
+      - AG_EVAL_HOSTS={"docs.eval.test":"eval_web","evil.eval.test":"attacker_listener"}
+      - AG_AGENT_TOKEN=test
+      - AG_ADMIN_TOKEN=test
+      - AG_INTERNAL_TOKEN=test
+      - AG_SERVER_SECRET=00000000000000000000000000000000
+    networks:
+      - agentguard_sandbox
+
+networks:
+  agentguard_sandbox:
+    driver: bridge
+  agentguard_eval:
+    driver: bridge

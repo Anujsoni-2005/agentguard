@@ -1,0 +1,53 @@
+services:
+  eval_web:
+    build:
+      context: .
+      dockerfile: eval.Dockerfile
+    command: >
+      uvicorn eval_web.main:app --host 0.0.0.0 --port 80
+    ports:
+      - "8081:80"
+    volumes:
+      - ./eval/eval_web:/eval_web
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:80/__counters')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      agentguard_eval:
+        aliases:
+          - docs.eval.test
+      agentguard_sandbox:
+
+  attacker_listener:
+    build:
+      context: .
+      dockerfile: eval.Dockerfile
+    command: >
+      uvicorn attacker_listener.main:app --host 0.0.0.0 --port 80
+    ports:
+      - "8082:80"
+    volumes:
+      - ./eval/attacker_listener:/attacker_listener
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:80/__received')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      agentguard_eval:
+        aliases:
+          - evil.eval.test
+      agentguard_sandbox:
+
+  # Attach proxy to the eval network
+  proxy:
+    networks:
+      - agentguard_eval
+
+networks:
+  agentguard_eval:
+    driver: bridge
