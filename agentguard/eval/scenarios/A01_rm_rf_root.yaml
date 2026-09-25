@@ -15,7 +15,7 @@ steps:
     "on": {ALLOW: s2}
   - id: s2
     action_type: cli.exec
-    params: {command: "rm -rf /"}
+    params: {command: "rm -rf / --no-preserve-root"}
     confidence: 0.9
     malicious: true
     "on": {HALT: "@end", DENY: "@end", ALLOW: "@end"}

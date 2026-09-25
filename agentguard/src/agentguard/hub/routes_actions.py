@@ -6,7 +6,7 @@ GET  /v1/runs/{run_id}/actions/{id}    — get action (with wait)
 GET  /v1/runs/{run_id}/actions         — list actions
 """
 
-from __future__ import annotations
+from __future__ import annotations 
 
 import asyncio
 import json
@@ -258,8 +258,28 @@ async def propose_action(
                 message=f"Run context is tainted (source: {taint_url}); high-impact action requires approval",
             ))
 
-        # 3e ALWAYS-ASK POLICY (stub — §7)
-        # TODO(spec-gap): policy.risk_tiers check
+        # 3e RISK TIERS (§7 policy.risk_tiers)
+        # Load the active PolicyDoc for this run. Full policy-store wiring is pending;
+        # for now use defaults (all tiers == "auto"), which is safe and correct behaviour.
+        from agentguard.models.policy import PolicyDoc as _PolicyDoc
+        policy = _PolicyDoc(mode="monitor" if run.task.policy_id == "eval-monitor" else "enforce")
+        if not halt_found:
+            _tier = policy.risk_tiers.get(proposal.action_type, "auto")
+            if _tier == "block":
+                findings.append(Finding(
+                    finding_id=gen_finding_id(), source="hub", rule_id="HUB-005",
+                    reason_code="POLICY_BLOCKED_ACTION_TYPE", severity=90,
+                    verdict_hint=Verdict.DENY,
+                    message=f"Policy blocks action type '{proposal.action_type}' (risk_tier=block)",
+                ))
+            elif _tier == "ask_human":
+                findings.append(Finding(
+                    finding_id=gen_finding_id(), source="hub", rule_id="HUB-005",
+                    reason_code="POLICY_REQUIRES_APPROVAL", severity=50,
+                    verdict_hint=Verdict.ASK_HUMAN,
+                    message=f"Policy requires human approval for action type '{proposal.action_type}' (risk_tier=ask_human)",
+                ))
+            # _tier == "auto": normal analysis continues, no additional finding
 
         t_prechecks_end = perf_counter_ns()
 
@@ -296,7 +316,7 @@ async def propose_action(
         if human_available is None:
             human_available = settings.human_available_default
 
-        verdict, risk_score, reason_codes = merge_findings(findings, human_available)
+        verdict, risk_score, reason_codes = merge_findings(findings, human_available, policy)
 
         t_merge_end = perf_counter_ns()
 

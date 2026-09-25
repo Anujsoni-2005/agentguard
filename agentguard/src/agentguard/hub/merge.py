@@ -14,6 +14,7 @@ from agentguard.registry import VERDICT_ORDER, Verdict
 def merge_findings(
     findings: list[Finding],
     human_available: bool,
+    policy: Any = None,
 ) -> tuple[Verdict, int, list[str]]:
     """
     Merge findings into (verdict, risk_score, reason_codes). §1.5.2 P5

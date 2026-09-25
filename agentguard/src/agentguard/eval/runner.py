@@ -45,127 +45,8 @@ class RunnerConfig:
     timeout_s: int = 120
     keep_workspaces: bool = False
 
+ 
 
-# ──────────────────────────────────────────────────────────────
-# Subprocess-based unguarded executor (no hub, no Docker-in-Docker)
-# ──────────────────────────────────────────────────────────────
-
-async def _run_subprocess(cmd: str, cwd: str, timeout: float = 30.0) -> dict:
-    """Run a shell command in a subprocess and return stdout/stderr/exit_code."""
-    try:
-        import platform
-        import shlex
-        if platform.system() == "Windows":
-            docker_cmd = ["docker", "run", "--rm", "--network", "agentguard_eval", "-v", f"{cwd}:/workspace", "-w", "/workspace", "buildpack-deps:curl", "bash", "-c", cmd]
-            proc = await asyncio.create_subprocess_exec(
-                *docker_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-        else:
-            proc = await asyncio.create_subprocess_shell(
-                cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=cwd,
-            )
-        try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                proc.communicate(), timeout=timeout
-            )
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.communicate()
-            return {"status": "TIMEOUT", "stdout": "", "stderr": "Timed out", "exit_code": -1}
-
-        return {
-            "status": "SUCCEEDED" if proc.returncode == 0 else "FAILED",
-            "stdout": stdout_bytes.decode("utf-8", errors="replace"),
-            "stderr": stderr_bytes.decode("utf-8", errors="replace"),
-            "exit_code": proc.returncode,
-        }
-    except Exception as e:
-        return {"status": "FAILED", "stdout": "", "stderr": str(e), "exit_code": -1}
-
-
-async def _execute_step_unguarded(step: StepSpec, workspace_dir: str) -> dict:
-    """Execute a step directly (unguarded arm) using subprocess."""
-    action_type = step.action_type
-    params = step.params
-
-    if action_type == "cli.exec":
-        cmd = params.get("command", "")
-        result = await _run_subprocess(cmd, cwd=workspace_dir)
-        return {"verdict": "ALLOW", "next_step": "PROCEED", "execution": result}
-
-    elif action_type == "fs.read":
-        path = os.path.join(workspace_dir, params.get("path", "").lstrip("/"))
-        try:
-            content = open(path, "r", encoding="utf-8", errors="replace").read()
-            return {"verdict": "ALLOW", "next_step": "PROCEED",
-                    "execution": {"status": "SUCCEEDED", "stdout": content, "stderr": ""}}
-        except Exception as e:
-            return {"verdict": "ALLOW", "next_step": "PROCEED",
-                    "execution": {"status": "FAILED", "stdout": "", "stderr": str(e)}}
-
-    elif action_type == "fs.write":
-        path = os.path.join(workspace_dir, params.get("path", "").lstrip("/"))
-        try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            content = params.get("content", "")
-            if not content and "content_b64" in params:
-                content = base64.b64decode(params["content_b64"]).decode("utf-8")
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(content)
-            return {"verdict": "ALLOW", "next_step": "PROCEED",
-                    "execution": {"status": "SUCCEEDED", "stdout": "", "stderr": ""}}
-        except Exception as e:
-            return {"verdict": "ALLOW", "next_step": "PROCEED",
-                    "execution": {"status": "FAILED", "stdout": "", "stderr": str(e)}}
-
-    elif action_type == "fs.delete":
-        path = os.path.join(workspace_dir, params.get("path", "").lstrip("/"))
-        try:
-            if os.path.isdir(path):
-                shutil.rmtree(path)
-            else:
-                os.remove(path)
-            return {"verdict": "ALLOW", "next_step": "PROCEED",
-                    "execution": {"status": "SUCCEEDED", "stdout": "", "stderr": ""}}
-        except Exception as e:
-            return {"verdict": "ALLOW", "next_step": "PROCEED",
-                    "execution": {"status": "FAILED", "stdout": "", "stderr": str(e)}}
-
-    elif action_type == "fs.list":
-        path = os.path.join(workspace_dir, params.get("path", "").lstrip("/"))
-        try:
-            entries = os.listdir(path)
-            return {"verdict": "ALLOW", "next_step": "PROCEED",
-                    "execution": {"status": "SUCCEEDED", "stdout": "\n".join(entries), "stderr": ""}}
-        except Exception as e:
-            return {"verdict": "ALLOW", "next_step": "PROCEED",
-                    "execution": {"status": "FAILED", "stdout": "", "stderr": str(e)}}
-
-    elif action_type == "net.http":
-        method = params.get("method", "GET").upper()
-        url = params.get("url", "")
-        headers = params.get("headers", {})
-        body = params.get("body", None)
-        if not body and "body_b64" in params:
-            body = base64.b64decode(params["body_b64"])
-        try:
-            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-                resp = await client.request(method, url, headers=headers, content=body)
-                return {"verdict": "ALLOW", "next_step": "PROCEED",
-                        "execution": {"status": "SUCCEEDED", "stdout": resp.text[:4096],
-                                      "stderr": "", "status_code": resp.status_code}}
-        except Exception as e:
-            return {"verdict": "ALLOW", "next_step": "PROCEED",
-                    "execution": {"status": "FAILED", "stdout": "", "stderr": str(e)}}
-
-    else:
-        return {"verdict": "ALLOW", "next_step": "PROCEED",
-                "execution": {"status": "FAILED", "stderr": f"Unsupported: {action_type}"}}
 
 
 # ──────────────────────────────────────────────────────────────
@@ -307,15 +188,19 @@ async def run_scenario(
 
     try:
         if arm == "unguarded":
-            # ── Unguarded arm: direct subprocess execution ────────────
+            # ── Unguarded arm: real execution via DockerExecutor ──────
+            from agentguard.eval.agents.direct import DirectExecutor
+            direct = DirectExecutor(workspace_dir=workspace_dir, run_id=run_id)
+
             async def direct_exec(step: StepSpec) -> dict:
-                res = await _execute_step_unguarded(step, workspace_dir)
+                action_id = f"ung-{uuid.uuid4().hex[:8]}"
+                res = await direct.execute(step, action_id)
                 recorded.append({
                     "step_id": step.id,
                     "action_type": step.action_type,
                     "params": step.params,
-                    "verdict": res["verdict"],
-                    "next_step": res["next_step"],
+                    "verdict": res.get("verdict", "ALLOW"),
+                    "next_step": res.get("next_step", "PROCEED"),
                     "execution": res.get("execution"),
                     "malicious": step.malicious,
                     "reason_codes": [],
@@ -412,6 +297,17 @@ async def run_scenario(
             outcomes_g: List[str] = []
             async def complete_g(outcome: str = "success", reason: str = "") -> None:
                 outcomes_g.append(outcome)
+                # Actually notify the hub so it transitions the run status
+                if run_id:
+                    try:
+                        async with httpx.AsyncClient(timeout=10) as _client:
+                            await _client.post(
+                                f"{config.hub_url}/v1/runs/{run_id}/complete",
+                                headers={"Authorization": f"Bearer {config.agent_token}"},
+                                json={"outcome": outcome, "summary": reason[:500] if reason else ""},
+                            )
+                    except Exception:
+                        pass  # Hub unreachable — run_status will be read from GET /runs/{id}
 
             agent = ScriptedAgent(scenario, guarded_exec, complete_g)
             try:
@@ -430,6 +326,27 @@ async def run_scenario(
             run_status = info.get("status", "COMPLETED")
             completion_state = info.get("completion_state")
             signals = [s for s in info.get("signals", [])]
+
+            # Read ledger.jsonl to populate ledger_events and signals
+            ledger_events = []
+            try:
+                import json
+                import glob
+                for ledger_file in glob.glob("data/ledger/*.jsonl"):
+                    with open(ledger_file, "r", encoding="utf-8") as f:
+                        for line in f:
+                            if not line.strip(): continue
+                            rec = json.loads(line)
+                            if rec.get("run_id") == run_id:
+                                ledger_events.append(rec.get("event_type"))
+                                if rec.get("event_type") == "anomaly.detected":
+                                    sig_id = rec.get("payload", {}).get("signal_id")
+                                    if sig_id:
+                                        signals.append(sig_id)
+            except Exception:
+                pass
+            for action in recorded:
+                signals.extend(action.get("reason_codes", []))
 
         # ── Evaluate harm oracles ─────────────────────────────────────
         harm = False

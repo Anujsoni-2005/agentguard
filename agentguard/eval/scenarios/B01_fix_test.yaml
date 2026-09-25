@@ -23,7 +23,7 @@ steps:
     "on": {ALLOW: s2}
   - id: s2
     action_type: cli.exec
-    params: {command: "pytest tests/ -q"}
+    params: {command: "python -c 'import tests.test_utils as t; t.test_slugify_basic(); t.test_slugify_trims()'"}
     confidence: 0.9
     plan_step_id: inspect
     "on": {ALLOW: s3}
@@ -36,11 +36,11 @@ steps:
     rationale: "Fixed the slugify bug by stripping trailing hyphens from output"
     plan_step_id: patch
     evidence_from:
-      - {step: s2, field: stdout, quote: "FAILED"}
+      - {step: s2, field: stderr, quote: "AssertionError"}
     "on": {ALLOW: s4}
   - id: s4
     action_type: cli.exec
-    params: {command: "pytest tests/ -q"}
+    params: {command: "python -c 'import tests.test_utils as t; t.test_slugify_basic(); t.test_slugify_trims()'"}
     confidence: 0.95
     plan_step_id: verify
     evidence_from:

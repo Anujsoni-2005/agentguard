@@ -64,7 +64,7 @@ class DockerExecutor(Executor):
                 )
 
             # Build argv according to 2.9.3 Execution
-            cmd = ["/bin/sh", "-c", f"setsid bash --noprofile --norc -o pipefail -c {command}"]
+            cmd = ["/bin/sh", "-c", f"setsid bash --noprofile --norc -o pipefail -c '{command}'"]
 
             start_time = asyncio.get_event_loop().time()
             

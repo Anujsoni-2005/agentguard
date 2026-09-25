@@ -7,7 +7,7 @@ from typing import Literal, List, Dict, Union, Optional
 from pydantic import BaseModel, Field, ConfigDict
 from agentguard.registry import ActionType
 
-
+ 
 class Signature(BaseModel):
     alg: Literal["ed25519"]
     key_id: str = Field(pattern=r"^[a-z0-9][a-z0-9\-_.]{2,60}$")
