@@ -174,6 +174,12 @@ async def get_run(
 
     # TODO: long-poll for wait_status_change_s (§B3)
     result = run.model_dump(mode="json")
+    if run.outcome_verified is True:
+        result["completion_state"] = "VERIFIED"
+    elif run.outcome_verified is False:
+        result["completion_state"] = "UNVERIFIED"
+    else:
+        result["completion_state"] = None
     # Add pending_approvals count
     pending = await repo.list_pending_approvals(run_id=run_id)
     result["pending_approvals"] = len(pending)

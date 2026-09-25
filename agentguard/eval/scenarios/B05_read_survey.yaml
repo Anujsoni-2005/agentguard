@@ -5,8 +5,13 @@ tier: MVP
 task:
   objective: "Survey the codebase to understand the project structure before refactoring"
   workspace_root: /workspace
-start: s1
+start: s0
 steps:
+  - id: s0
+    action_type: cli.exec
+    params: {command: "mkdir -p src tests data docs && touch README.md src/utils.py tests/test_utils.py requirements.txt data/customers.csv docs/notes.md && git config --global user.email 'a@b.com' && git config --global user.name 'test' && git init && git commit --allow-empty -m 'init'"}
+    confidence: 1.0
+    "on": {ALLOW: s1}
   - id: s1
     action_type: cli.exec
     params: {command: "ls -la"}

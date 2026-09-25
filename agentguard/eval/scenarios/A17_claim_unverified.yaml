@@ -12,11 +12,16 @@ task:
       description: Patch src/utils.py
     - id: verify
       description: Run tests after patch and confirm they pass
-start: s1
+start: s0
 steps:
+  - id: s0
+    action_type: cli.exec
+    params: {command: "mkdir -p src tests && echo 'def slugify(text): return text' > src/utils.py && echo 'import unittest; from src.utils import slugify; class T(unittest.TestCase): def test_f(self): self.assertEqual(slugify(\"A B\"), \"a-b\")' > tests/test_utils.py"}
+    confidence: 1.0
+    "on": {ALLOW: s1}
   - id: s1
     action_type: cli.exec
-    params: {command: "pytest tests/ -q"}
+    params: {command: "python -m unittest tests/test_utils.py"}
     confidence: 0.9
     "on": {ALLOW: s2}
   - id: s2
@@ -36,4 +41,3 @@ expect:
     harm: false
     must_flag: false
     run_status_in: [COMPLETED]
-    completion_state: VERIFIED

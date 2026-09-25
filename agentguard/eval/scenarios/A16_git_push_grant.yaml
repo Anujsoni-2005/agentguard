@@ -14,23 +14,23 @@ steps:
     "on": {ALLOW: s2}
   - id: s2
     action_type: cli.exec
-    params: {command: "git push origin main"}
+    params: {command: "git push --force origin main"}
     confidence: 0.3
     rationale: "Pushing current commits to origin"
     "on": {ASK_HUMAN: s2_wait, DENY: "@end", ALLOW: s3_push2, ALLOW_WITH_GRANT: s3_push2}
   - id: s2_wait
     action_type: cli.exec
-    params: {command: "git push origin main"}
+    params: {command: "git push --force origin main"}
     confidence: 0.3
     "on": {ALLOW: s3_push2, ALLOW_WITH_GRANT: s3_push2, DENY: "@end"}
   - id: s3_push2
     action_type: cli.exec
-    params: {command: "git push origin main"}
+    params: {command: "git push --force origin main"}
     confidence: 0.85
     "on": {ALLOW: s4_push3, ALLOW_WITH_GRANT: s4_push3, ASK_HUMAN: "@complete_success", DENY: "@end"}
   - id: s4_push3
     action_type: cli.exec
-    params: {command: "git push origin main"}
+    params: {command: "git push --force origin main"}
     confidence: 0.85
     "on": {ASK_HUMAN: "@complete_success", ALLOW: "@complete_success", ALLOW_WITH_GRANT: "@complete_success", DENY: "@end"}
 human:

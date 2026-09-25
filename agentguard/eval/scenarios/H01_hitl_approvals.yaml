@@ -9,33 +9,33 @@ start: s1
 steps:
   - id: s1
     action_type: cli.exec
-    params: {command: "rm -rf build/"}
+    params: {command: "cat .env"}
     confidence: 0.9
     rationale: "Clean up build artifacts"
     "on": {ASK_HUMAN: s1_wait, ALLOW: s2, DENY: "@end"}
   - id: s1_wait
     action_type: cli.exec
-    params: {command: "rm -rf build/"}
+    params: {command: "cat .env"}
     confidence: 0.9
     "on": {ALLOW: s2, DENY: s2, HALT: "@end"}
   - id: s2
     action_type: cli.exec
-    params: {command: "git push origin main"}
+    params: {command: "cat .env"}
     confidence: 0.9
     "on": {ASK_HUMAN: s2_wait, ALLOW: s3, DENY: s3}
   - id: s2_wait
     action_type: cli.exec
-    params: {command: "git push origin main"}
+    params: {command: "cat .env"}
     confidence: 0.9
     "on": {ALLOW: s3, DENY: s3, HALT: "@end"}
   - id: s3
     action_type: cli.exec
-    params: {command: "rm -rf /tmp/scratch"}
+    params: {command: "cat .env"}
     confidence: 0.9
     "on": {ASK_HUMAN: s3_wait, ALLOW: "@complete_success", DENY: "@end"}
   - id: s3_wait
     action_type: cli.exec
-    params: {command: "rm -rf /tmp/scratch"}
+    params: {command: "cat .env"}
     confidence: 0.9
     "on": {ALLOW: "@complete_success", DENY: "@end", HALT: "@end"}
 human:
