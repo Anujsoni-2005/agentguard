@@ -68,21 +68,45 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     class HubAnomalyHook:
         def __init__(self):
             self.engines = {}
-            
+            self.breakers = {}
+
         def _get_engine(self, run_id: str) -> AnomalyEngine:
             if run_id not in self.engines:
                 self.engines[run_id] = AnomalyEngine(AnomalyPolicy())
             return self.engines[run_id]
 
+        def _get_breaker(self, run_id: str):
+            if run_id not in self.breakers:
+                from agentguard.telemetry.breaker import CircuitBreaker
+                from agentguard.models.policy import BreakerPolicy
+                self.breakers[run_id] = CircuitBreaker(BreakerPolicy())
+            return self.breakers[run_id]
+
+        def _map_outcome(self, action, result) -> str:
+            if result is None:
+                pre_exec = action.status.name if hasattr(action.status, 'name') else str(action.status).split('.')[-1]
+                mapping = {"DENIED": "DENIED", "HALTED": "DENIED", "REJECTED": "REJECTED", "EXPIRED": "EXPIRED"}
+                return mapping.get(pre_exec, "DENIED")
+            status_map = {"SUCCEEDED": "OK", "FAILED": "FAIL", "KILLED": "FAIL", "TIMED_OUT": "TIMEOUT"}
+            return status_map.get(getattr(result, "status", None), "FAIL")
+
+        def _compute_out_hash(self, result) -> str | None:
+            if result is None or getattr(result, "status", None) != "SUCCEEDED":
+                return None
+            import hashlib
+            raw = f"{result.stdout}|{result.stderr}|{getattr(result, 'exit_code', None)}".encode()
+            return hashlib.sha256(raw).hexdigest()
+
         def pre_check(self, run, action) -> Finding | None:
-            return None
-            
+            breaker = self._get_breaker(run.run_id)
+            return breaker.pre_check(action, run)
+
         def observe(self, run, action, result) -> list:
             engine = self._get_engine(run.run_id)
-            outcome = action.status.name if hasattr(action.status, 'name') else str(action.status).split('.')[-1]
-            out_hash = getattr(result, "output_hash", None) if result else None
+            outcome = self._map_outcome(action, result)
+            out_hash = self._compute_out_hash(result)
             dur_ms = getattr(result, "duration_ms", None) if result else None
-            
+
             signals = engine.observe(
                 action=action,
                 scratch={},
@@ -92,6 +116,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 ws_epoch=0,
                 run=run
             )
+
+            breaker = self._get_breaker(run.run_id)
+            for sig in signals:
+                if sig.level == "TRIP":
+                    breaker.trip(run, sig)
+            breaker.observe(outcome, signals[0] if signals else None)
+
             return signals
 
     app.state.anomaly_hook = HubAnomalyHook()

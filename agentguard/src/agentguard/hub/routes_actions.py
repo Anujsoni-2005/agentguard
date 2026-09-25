@@ -491,6 +491,27 @@ async def propose_action(
                 taint_reasons=taint_reasons,
                 meta=meta
             )
+            
+            if execution_result is not None and getattr(execution_result, "output_tainted", False):
+                from agentguard.models.run import TaintSource
+                reasons = getattr(execution_result, "taint_reasons", []) or []
+                new_level = 2 if len(reasons) >= 3 else 1
+                if new_level > run.taint.level:
+                    run.taint.level = new_level
+                run.taint.sources.append(TaintSource(
+                    action_id=new_action_id,
+                    url=(execution_result.meta.get("final_url") or execution_result.meta.get("url")) if getattr(execution_result, "meta", None) else None,
+                    reasons=reasons,
+                    at=utcnow(),
+                ))
+                run.taint.sources = run.taint.sources[-20:]
+                await repo.update_run(run)
+                await ledger.append(
+                    run_id=run_id, event_type="taint.raised", actor="hub",
+                    action_id=new_action_id,
+                    payload={"level": run.taint.level, "reasons": reasons},
+                    durable=True,
+                )
         else:
             from agentguard.models.common import ExecutionResult
             execution_result = ExecutionResult(status="NOT_EXECUTED", exit_code=-1, stdout="", stderr="", truncated=False, duration_ms=0.0, output_tainted=False, taint_reasons=[], meta={})
@@ -533,9 +554,8 @@ async def propose_action(
             durable=True
         )
         if sig.level == "TRIP":
-            run.status = RunStatus.HALTED
-            run.halt_reason = f"Anomaly {sig.id} tripped"
-            run.ended_at = utcnow()
+            # breaker.trip() already set run.status/pause_reason correctly
+            # inside HubAnomalyHook.observe() — just persist it here.
             await repo.update_run(run)
 
     # ── Build response ──────────────────────────────────────────────

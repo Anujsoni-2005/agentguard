@@ -351,3 +351,30 @@ async def clear_taint(
     )
 
     return {"cleared": True}
+
+@router.post("/runs/{run_id}/resume")
+async def resume_run(
+    run_id: str,
+    request: Request,
+    role: str = require_role("admin"),
+) -> dict[str, Any]:
+    """Resume a PAUSED run (e.g. after a circuit breaker trip). §8.6"""
+    repo = request.app.state.repo
+    ledger = request.app.state.ledger
+
+    run = await repo.get_run(run_id)
+    if run is None:
+        raise AgentGuardError("RUN_NOT_FOUND", f"Run {run_id} does not exist")
+    if run.status != RunStatus.PAUSED:
+        raise AgentGuardError("INVALID_STATE", f"Run is not paused (status={run.status})")
+
+    breaker = request.app.state.anomaly_hook._get_breaker(run_id)
+    breaker.resume(run)
+    await repo.update_run(run)
+
+    await ledger.append(
+        run_id=run_id, event_type="run.resumed", actor="human",
+        action_id=None, payload={}, durable=True,
+    )
+
+    return {"run_id": run_id, "status": run.status.value}

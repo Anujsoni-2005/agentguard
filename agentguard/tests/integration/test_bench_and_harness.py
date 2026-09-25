@@ -7,8 +7,9 @@ def test_bench_harness_execution():
     env = os.environ.copy()
     env["PYTHONPATH"] = "src"
     
+    import sys
     result = subprocess.run(
-        [".venv/Scripts/python.exe", "-m", "agentguard.bench"],
+        [sys.executable, "-m", "agentguard.bench"],
         capture_output=True,
         text=True,
         env=env
