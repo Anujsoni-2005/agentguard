@@ -13,7 +13,7 @@ from agentguard.models.policy import FsPolicy
 from agentguard.config import Settings
 settings = Settings(_env_file=None, agent_token="stub", admin_token="stub", internal_token="stub", server_secret="stub"*32)
 
-AG_ALLOWED_HOST_ROOTS = ["/workspace", "/tmp"]
+AG_ALLOWED_HOST_ROOTS = ["/workspace", "/tmp", "E:\\New folder\\agentguard\\eval\\fixtures"]
 AG_WORKSPACE_MAX_FILES = 50000
 AG_WORKSPACE_MAX_BYTES = 209715200
 AG_DATA_DIR = "./data"

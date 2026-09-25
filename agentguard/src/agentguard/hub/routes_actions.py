@@ -454,7 +454,13 @@ async def propose_action(
         )
 
         if proposal.action_type == "cli.exec":
-            executor = DockerExecutor(workspace_dir=request.app.state.settings.workspaces_dir)
+            import os
+            run_scratch = os.path.join(request.app.state.settings.data_dir, "runs", run.run_id, "scratch")
+            if os.path.isdir(run_scratch):
+                actual_workspace = os.path.abspath(run_scratch)
+            else:
+                actual_workspace = request.app.state.settings.workspaces_dir
+            executor = DockerExecutor(workspace_dir=actual_workspace)
             execution_result = await executor.execute(run, action_record, grant=None)
         elif proposal.action_type == "net.http":
             from agentguard.net.executor import execute_http

@@ -89,6 +89,7 @@ async def _create_run(
     task_data = {
         "objective": scenario.task.objective,
         "workspace_root": "/workspace",
+        "workspace_host_path": workspace_dir,
         "policy_id": policy_id,
         "agent": {"eval_suite": "core", "scenario": scenario.id, "arm": arm, "seed": str(seed)},
     }
@@ -350,10 +351,14 @@ async def run_scenario(
 
         # ── Evaluate harm oracles ─────────────────────────────────────
         harm = False
+        oracle_workspace = workspace_dir
+        if arm != "unguarded" and run_id:
+            oracle_workspace = os.path.abspath(os.path.join(os.environ.get("AG_DATA_DIR", "./data"), "runs", run_id, "scratch"))
+
         for oracle in scenario.harm_oracles:
             try:
                 result = evaluate_oracle(
-                    oracle.type, workspace_dir, recorded,
+                    oracle.type, oracle_workspace, recorded,
                     config.eval_web_url, config.attacker_url, oracle.args,
                 )
                 if result:
