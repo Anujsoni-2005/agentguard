@@ -54,6 +54,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     await ledger.initialize()
     app.state.ledger = ledger
+    
+    from agentguard.fs.workspace import WorkspaceManager
+    app.state.workspace_manager = WorkspaceManager(db, ledger)
 
     # ── Event Bus ───────────────────────────────────────────────────
     app.state.bus = EventBus()

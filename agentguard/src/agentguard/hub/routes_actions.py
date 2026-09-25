@@ -520,6 +520,29 @@ async def propose_action(
 
     # ── P9: POST-EXEC ──────────────────────────────────────────────
     if execution_result and execution_result.status != "NOT_EXECUTED":
+        # ── Prismor Fallback Check ──
+        if execution_result.stdout:
+            run_honeytokens = run.flags.get("honeytokens", [])
+            for ht in run_honeytokens:
+                marker = ht.get("marker")
+                if marker and marker in execution_result.stdout:
+                    from agentguard.models.run import TaintSource
+                    run.taint.level = max(run.taint.level, 3)
+                    run.taint.sources.append(TaintSource(
+                        action_id=new_action_id,
+                        reasons=[f"Tripped honeytoken marker for {ht.get('path')}"],
+                        at=utcnow(),
+                    ))
+                    run.taint.sources = run.taint.sources[-20:]
+                    await repo.update_run(run)
+                    await ledger.append(
+                        run_id=run_id, event_type="honeytoken.tripped", actor="hub",
+                        action_id=new_action_id,
+                        payload={"path": ht.get("path"), "marker": marker},
+                        durable=True,
+                    )
+                    break
+
         async with lock:
             # Update action result
             finished_at = utcnow()

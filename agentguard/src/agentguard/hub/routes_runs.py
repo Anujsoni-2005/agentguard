@@ -109,6 +109,22 @@ async def create_run(
     # Persist
     await repo.insert_run(run)
 
+    # ── Eager Workspace Creation ──
+    try:
+        from agentguard.models.policy import FsPolicy
+        fs_policy = FsPolicy() # Use defaults
+        workspace_state = request.app.state.workspace_manager.create_workspace(
+            run_id=run.run_id,
+            host_path=body.task.workspace_host_path,
+            fs_policy=fs_policy
+        )
+        if workspace_state.honeytokens:
+            run.flags["honeytokens"] = workspace_state.honeytokens
+            await repo.update_run(run)
+    except Exception as e:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=str(e))
+
     # Ledger: run.created (durable=False per §0.7)
     ledger_rec = await ledger.append(
         run_id=new_run_id,

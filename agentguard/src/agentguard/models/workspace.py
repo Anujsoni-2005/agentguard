@@ -18,6 +18,7 @@ class WorkspaceState(BaseModel):
     excluded: List[str]                    # relative paths excluded from copy (secrets etc.), capped 200
     skipped_symlinks: List[str]
     honeytoken_paths: List[str]            # relative paths inside workspace
+    honeytokens: List[Dict[str, str]] = [] # {path, marker} pairs for Prismor check
     baseline_snapshot_id: str
     last_snapshot_id: str
     promoted_at: Optional[str] = None

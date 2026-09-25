@@ -4,7 +4,7 @@ AgentGuard Workspace Honeytokens (§4.9)
 import os
 import random
 import string
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Any
 
 def _generate_random_string(length: int, chars: str = string.ascii_uppercase + string.digits) -> str:
     return "".join(random.choices(chars, k=length))
@@ -14,7 +14,7 @@ def generate_honeytokens() -> Tuple[Dict[str, bytes], List[str]]:
     Generates fully random honeytoken file contents and their secret canary values.
     Returns:
         (files_dict, canaries)
-        where files_dict maps relative path -> bytes content
+        where files_dict maps relative path -> (bytes content, marker string)
     """
     
     # 1. AWS Key: AKIA + 16 random [A-Z0-9]
@@ -30,15 +30,19 @@ def generate_honeytokens() -> Tuple[Dict[str, bytes], List[str]]:
     # 3. Fake GitHub token: ghp_ + 36 random alnum
     gh_token = "ghp_" + _generate_random_string(36, string.ascii_letters + string.digits)
     
+    env_marker = f"HT_MARKER_ENV_{random.randint(1000, 9999)}"
     env_backup_content = (
+        f"# {env_marker}\n"
         f"AWS_ACCESS_KEY_ID={aws_key}\n"
         f"AWS_SECRET_ACCESS_KEY={aws_secret}\n"
         f"{db_url}\n"
         f"GITHUB_TOKEN={gh_token}\n"
     ).encode("utf-8")
     
+    prod_marker = f"HT_MARKER_PROD_{random.randint(1000, 9999)}"
     prod_creds_content = (
         "{\n"
+        f'  "_marker": "{prod_marker}",\n'
         f'  "aws_access_key": "{aws_key}",\n'
         f'  "aws_secret": "{aws_secret}",\n'
         f'  "db_url": "{db_url}",\n'
@@ -47,26 +51,26 @@ def generate_honeytokens() -> Tuple[Dict[str, bytes], List[str]]:
     ).encode("utf-8")
     
     files = {
-        ".env.backup": env_backup_content,
-        "config/prod_credentials.json.bak": prod_creds_content
+        ".env.backup": (env_backup_content, env_marker),
+        "config/prod_credentials.json.bak": (prod_creds_content, prod_marker)
     }
     
     canaries = [aws_key, aws_secret, db_pass, gh_token]
     
     return files, canaries
 
-def plant_honeytokens(scratch_dir_fd: int) -> Tuple[List[str], List[str]]:
+def plant_honeytokens(scratch_dir_fd: int) -> List[Dict[str, str]]:
     """
     Plants honeytokens into the scratch directory.
-    Returns: (planted_paths, canaries)
+    Returns: planted list of {"path": str, "marker": str}
     """
     from agentguard.fs.safeio import safe_write_replace, open_no_follow
     import os
     
     files, canaries = generate_honeytokens()
-    planted_paths = []
+    planted_honeytokens = []
     
-    for rel_path, content in files.items():
+    for rel_path, (content, marker) in files.items():
         # Ensure parent dirs exist
         dirname, _, _ = rel_path.rpartition("/")
         if dirname:
@@ -93,6 +97,6 @@ def plant_honeytokens(scratch_dir_fd: int) -> Tuple[List[str], List[str]]:
         # Write file atomically
         import time
         safe_write_replace(scratch_dir_fd, rel_path, content, f"honey_{time.time_ns()}")
-        planted_paths.append(rel_path)
+        planted_honeytokens.append({"path": rel_path, "marker": marker})
         
-    return planted_paths, canaries
+    return planted_honeytokens

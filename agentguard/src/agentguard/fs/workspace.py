@@ -79,6 +79,7 @@ class WorkspaceManager:
                 excluded=[],
                 skipped_symlinks=[],
                 honeytoken_paths=[],
+                honeytokens=[],
                 baseline_snapshot_id=f"snap_{ULID()}",
                 last_snapshot_id=f"snap_{ULID()}"
             )
@@ -184,14 +185,15 @@ class WorkspaceManager:
         
         # Plant honeytokens in scratch ONLY
         honeytoken_paths = []
+        planted_honeytokens = []
         if fs_policy.honeytokens_enabled:
             # We open scratch dir descriptor
             if hasattr(os, "O_DIRECTORY"):
                 try:
                     fd = os.open(scratch_dir, os.O_RDONLY | os.O_DIRECTORY)
                     try:
-                        planted, canaries = plant_honeytokens(fd)
-                        honeytoken_paths.extend(planted)
+                        planted_honeytokens = plant_honeytokens(fd)
+                        honeytoken_paths.extend([ht["path"] for ht in planted_honeytokens])
                         # Register canaries logic would go here
                     finally:
                         os.close(fd)
@@ -214,6 +216,7 @@ class WorkspaceManager:
             excluded=excluded,
             skipped_symlinks=skipped_symlinks,
             honeytoken_paths=honeytoken_paths,
+            honeytokens=planted_honeytokens,
             baseline_snapshot_id=baseline_snap_id,
             last_snapshot_id=baseline_snap_id
         )
