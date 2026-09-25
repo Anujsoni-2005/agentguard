@@ -45,7 +45,7 @@ class DockerExecutor(Executor):
             except docker.errors.NotFound:
                 # 2.9.2 Container Hardening
                 container = self.client.containers.run(
-                    "python:3.11-slim",
+                    "python:3.11",
                     name=container_name,
                     command="sleep infinity", # keep alive
                     detach=True,
