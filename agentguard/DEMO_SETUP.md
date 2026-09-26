@@ -19,15 +19,12 @@ Install these once on the demo laptop:
 
 ---
 
-## Step 1 — Clone both repos
+## Step 1 — Clone the repository
 
 ```bash
-# Backend
 git clone https://github.com/Anujsoni-2005/agentguard.git
 cd agentguard
 ```
-
-For the **frontend**, copy the `agentguard-—-autonomous-oversight` folder to the demo laptop (zip it and transfer via USB / Google Drive / email).
 
 ---
 
@@ -86,7 +83,7 @@ curl http://127.0.0.1:8000/v1/health
 Open a **new terminal** (keep the hub running).
 
 ```bash
-cd "agentguard-—-autonomous-oversight"
+cd frontend
 
 npm install --legacy-peer-deps
 
@@ -158,7 +155,7 @@ pip install -r requirements-hub.txt
 python -m uvicorn agentguard.hub.app:create_app --factory --host 127.0.0.1 --port 8000
 
 # ── Terminal 2: Frontend ──────────────────────────────
-cd "agentguard-—-autonomous-oversight"
+cd frontend
 npm install --legacy-peer-deps
 npm run dev
 

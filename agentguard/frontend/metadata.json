@@ -1,0 +1,6 @@
+{
+  "name": "AgentGuard — Autonomous Oversight",
+  "description": "Autonomous agent runtime oversight, human-in-the-loop validation, and guardrail telemetry platform.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
