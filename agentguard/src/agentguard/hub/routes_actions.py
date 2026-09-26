@@ -138,6 +138,11 @@ async def propose_action(
         now = utcnow()
         new_action_id = gen_action_id()
 
+        # Load the active PolicyDoc for this run. Full policy-store wiring is pending;
+        # for now use defaults (all tiers == "auto"), which is safe and correct behaviour.
+        from agentguard.models.policy import PolicyDoc as _PolicyDoc
+        policy = _PolicyDoc(mode="monitor" if run.task.policy_id == "eval-monitor" else "enforce")
+
         if run.status != RunStatus.RUNNING:
             # Create action with DENY/RUN_NOT_ACTIVE (§1.7 F-4)
             verdict = Verdict.HALT if run.status == RunStatus.HALTED else Verdict.DENY
@@ -259,10 +264,6 @@ async def propose_action(
             ))
 
         # 3e RISK TIERS (§7 policy.risk_tiers)
-        # Load the active PolicyDoc for this run. Full policy-store wiring is pending;
-        # for now use defaults (all tiers == "auto"), which is safe and correct behaviour.
-        from agentguard.models.policy import PolicyDoc as _PolicyDoc
-        policy = _PolicyDoc(mode="monitor" if run.task.policy_id == "eval-monitor" else "enforce")
         if not halt_found:
             _tier = policy.risk_tiers.get(proposal.action_type, "auto")
             if _tier == "block":
@@ -318,6 +319,23 @@ async def propose_action(
 
         verdict, risk_score, reason_codes = merge_findings(findings, human_available, policy)
 
+        if "FS_HONEYTOKEN_ACCESS" in reason_codes:
+            run.flags["compromise_suspected"] = True
+            run.flags["honeytoken_hits"] = run.flags.get("honeytoken_hits", 0) + 1
+            await repo.update_run(run)
+            await ledger.append(
+                run_id=run_id, event_type="honeytoken.triggered", actor="hub",
+                action_id=new_action_id,
+                payload={
+                    "reason_codes": reason_codes,
+                    "severity": max(
+                        (f.severity for f in findings if f.reason_code == "FS_HONEYTOKEN_ACCESS"),
+                        default=95,
+                    ),
+                },
+                durable=True,
+            )
+
         t_merge_end = perf_counter_ns()
 
         # ── P6: GRANT ───────────────────────────────────────────────
@@ -356,7 +374,8 @@ async def propose_action(
         approval_summary = None
         if verdict == Verdict.ASK_HUMAN:
             approval_id_val = gen_approval_id()
-            expires_at = utcnow()  # TODO: compute from TTL
+            import datetime
+            expires_at = (datetime.datetime.utcnow() + datetime.timedelta(minutes=5)).isoformat() + "Z"
             summary_text = f"{proposal.action_type}: {proposal.rationale[:100] or 'action requires approval'}"
 
             await repo.insert_approval({
@@ -449,12 +468,7 @@ async def propose_action(
 
     # LOCK RELEASED
 
-    # ── P8: EXECUTE ─────────────────────────────────────────────────
-    execution_result = None
-    t_execute_end = t_ledger_end
-
-    # Monitor Mode Override (P6b)
-    # Spec §1.6.4: Monitor mode MUST change the final verdict to ALLOW but MUST record the unadjusted verdict and findings in the ledger.
+    # -- P8/P9/P10: EXECUTE & POST-EXEC --------------------------------
     api_verdict = verdict
     api_next_step = next_step
     api_action_status = action_status
@@ -462,6 +476,185 @@ async def propose_action(
         api_verdict = Verdict.ALLOW
         api_next_step = NEXT_STEP_TABLE[Verdict.ALLOW]
         api_action_status = ActionStatus.APPROVED
+
+    action_record.status = api_action_status
+    action_record.findings = findings
+    action_record.reason_codes = reason_codes
+
+    execution_result = await _run_p8_p9_p10(
+        request=request, run_id=run_id, new_action_id=new_action_id,
+        action_record=action_record, run=run, repo=repo, ledger=ledger,
+        lock=lock, execute=execute, api_verdict=api_verdict, seq=seq,
+        proposal=proposal, now=now
+    )
+    t_execute_end = perf_counter_ns()
+    # ── Build response ──────────────────────────────────────────────
+    t_end = perf_counter_ns()
+
+    timing = Timing(
+        total_ms=duration_ms(t_start, t_end),
+        validate_ms=duration_ms(t_start, t_validate),
+        prechecks_ms=duration_ms(t_prechecks_start, t_prechecks_end),
+        analyzers_ms=analyzers_ms,
+        merge_ms=duration_ms(t_prechecks_end, t_merge_end),
+        ledger_ms=duration_ms(t_merge_end, t_ledger_end),
+        execute_ms=duration_ms(t_ledger_end, t_execute_end) if execution_result else None,
+    )
+
+    # HTTP status: 200 for ALLOW/DENY, 202 for ASK_HUMAN (§1.4.2)
+    from fastapi.responses import JSONResponse
+    http_status = 202 if api_verdict == Verdict.ASK_HUMAN else 200
+
+    decision = _build_decision(
+        action_id=new_action_id, run_id=run_id, seq=seq,
+        status=api_action_status, verdict=api_verdict, next_step_str=api_next_step.value,
+        reason_codes=reason_codes, risk_score=risk_score, findings=findings,
+        timing=timing,
+        ledger_idx=verdict_rec.idx, ledger_hash=verdict_rec.hash,
+        fingerprint=fingerprint, params_hash=params_hash,
+        approval=approval_summary, grant=grant_summary,
+        execution=execution_result,
+    )
+
+    return JSONResponse(status_code=http_status, content=decision)
+
+
+@router.get("/runs/{run_id}/actions/{action_id}")
+async def get_action(
+    run_id: str,
+    action_id: str,
+    request: Request,
+    wait_s: int = Query(default=0, ge=0, le=30),
+    role: str = require_role("agent", "admin"),
+) -> dict[str, Any]:
+    """Get action decision with optional long-poll. §1.4.2"""
+    repo = request.app.state.repo
+    action = await repo.find_action_by_client_id(run_id, action_id)
+    # Also try by action_id
+    if action is None:
+        cursor = await repo._db.execute(
+            "SELECT * FROM actions WHERE action_id=? AND run_id=?",
+            (action_id, run_id),
+        )
+        row = await cursor.fetchone()
+        if row:
+            action = dict(row)
+    if action is None:
+        raise AgentGuardError("ACTION_NOT_FOUND", f"Action {action_id} not found")
+
+    import asyncio
+    import time
+
+    if wait_s and wait_s > 0 and action["status"] in (ActionStatus.PENDING_APPROVAL.value, ActionStatus.EXECUTING.value):
+        deadline = time.monotonic() + min(wait_s, 30)
+        starting_status = action["status"]
+        while time.monotonic() < deadline:
+            await asyncio.sleep(0.5)
+            new_action = await repo.find_action_by_client_id(run_id, action_id)
+            if new_action is None:
+                cursor = await repo._db.execute(
+                    "SELECT * FROM actions WHERE action_id=? AND run_id=?",
+                    (action_id, run_id),
+                )
+                row = await cursor.fetchone()
+                if row:
+                    new_action = dict(row)
+            if new_action and new_action["status"] != starting_status:
+                action = new_action
+                break
+
+    return {
+        "action_id": action["action_id"],
+        "run_id": run_id,
+        "seq": action["seq"],
+        "status": action["status"],
+        "verdict": action.get("verdict"),
+        "next_step": action.get("next_step"),
+        "reason_codes": json.loads(action.get("reason_codes_json", "[]")),
+        "risk_score": action.get("risk_score", 0),
+        "findings": json.loads(action.get("findings_json", "[]")),
+        "timing": {"total_ms": 0, "validate_ms": 0, "prechecks_ms": 0, "analyzers_ms": {}, "merge_ms": 0, "ledger_ms": 0},
+        "ledger_idx": action.get("ledger_idx_verdict", 0),
+        "ledger_hash": "",
+        "execution": __import__("json").loads(action["result_json"]) if action.get("result_json") else None,
+    }
+
+
+@router.get("/runs/{run_id}/actions")
+async def list_actions(
+    run_id: str,
+    request: Request,
+    after_seq: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=500),
+    role: str = require_role("agent", "admin"),
+) -> dict[str, Any]:
+    """List actions. §1.4.2"""
+    repo = request.app.state.repo
+    items = await repo.list_actions(run_id, after_seq=after_seq, limit=limit)
+    for item in items:
+        item["reason_codes"] = json.loads(item.get("reason_codes_json", "[]"))
+        item["findings"] = json.loads(item.get("findings_json", "[]"))
+    return {"items": items}
+
+
+def _build_decision(
+    *,
+    action_id: str,
+    run_id: str,
+    seq: int,
+    status: ActionStatus,
+    verdict: Verdict,
+    next_step_str: str,
+    reason_codes: list[str],
+    risk_score: int,
+    findings: list[Finding],
+    timing: Timing,
+    ledger_idx: int,
+    ledger_hash: str,
+    fingerprint: str = "",
+    params_hash: str = "",
+    approval: Any = None,
+    grant: Any = None,
+    execution: Any = None,
+    retry_after_ms: int | None = None,
+) -> dict[str, Any]:
+    """Build the ActionDecision response dict."""
+    result: dict[str, Any] = {
+        "action_id": action_id,
+        "run_id": run_id,
+        "seq": seq,
+        "status": status.value if isinstance(status, ActionStatus) else status,
+        "verdict": verdict.value if isinstance(verdict, Verdict) else verdict,
+        "next_step": next_step_str,
+        "retry_after_ms": retry_after_ms,
+        "reason_codes": reason_codes,
+        "risk_score": risk_score,
+        "findings": [f.model_dump(mode="json") if hasattr(f, "model_dump") else f for f in findings],
+        "approval": approval.model_dump(mode="json") if approval and hasattr(approval, "model_dump") else approval,
+        "grant": grant.model_dump(mode="json") if grant and hasattr(grant, "model_dump") else grant,
+        "execution": execution.model_dump(mode="json") if execution and hasattr(execution, "model_dump") else execution,
+        "timing": timing.model_dump(mode="json") if hasattr(timing, "model_dump") else timing,
+        "ledger_idx": ledger_idx,
+        "ledger_hash": ledger_hash,
+        "fingerprint": fingerprint,
+        "params_hash": params_hash,
+        "advisories": [],
+        "enforced": True,
+        "would_have_verdict": None,
+    }
+    return result
+
+
+async def _run_p8_p9_p10(
+    request: Request, run_id: str, new_action_id: str,
+    action_record: Any, run: Any, repo: Any, ledger: Any,
+    lock: asyncio.Lock, execute: bool, api_verdict: Verdict, seq: int,
+    proposal: Any, now: str
+) -> Any:
+    from agentguard.timeutil import utcnow, perf_counter_ns
+    import json
+    # ── P8: EXECUTE ─────────────────────────────────────────────────
+    execution_result = None
 
     if api_verdict in {Verdict.ALLOW, Verdict.ALLOW_WITH_GRANT} and execute:
         # Ledger: action.executing
@@ -471,6 +664,10 @@ async def propose_action(
             payload={"seq": seq, "action_type": proposal.action_type},
             durable=False,
         )
+        await repo._db.execute("UPDATE actions SET status=? WHERE action_id=?", ("EXECUTING", new_action_id))
+        await repo._db.commit()
+        await asyncio.sleep(0.01) # Yield to event loop to allow poll to return
+
 
         if proposal.action_type == "cli.exec":
             import os
@@ -541,8 +738,7 @@ async def propose_action(
             from agentguard.models.common import ExecutionResult
             execution_result = ExecutionResult(status="NOT_EXECUTED", exit_code=-1, stdout="", stderr="", truncated=False, duration_ms=0.0, output_tainted=False, taint_reasons=[], meta={})
 
-        t_execute_end = perf_counter_ns()
-
+    
     # ── P9: POST-EXEC ──────────────────────────────────────────────
     if execution_result and execution_result.status != "NOT_EXECUTED":
         # ── Prismor Fallback Check ──
@@ -591,9 +787,8 @@ async def propose_action(
             )
 
     # ── P10: ANOMALY OBSERVE ───────────────────────────────────────
-    action_record.status = action_status
-    action_record.findings = findings
-    action_record.reason_codes = reason_codes
+    if execution_result and execution_result.status != "NOT_EXECUTED":
+        action_record.status = ActionStatus(execution_result.status)
     signals = request.app.state.anomaly_hook.observe(run, action_record, execution_result)
     for sig in signals:
         await ledger.append(
@@ -607,138 +802,5 @@ async def propose_action(
             # inside HubAnomalyHook.observe() — just persist it here.
             await repo.update_run(run)
 
-    # ── Build response ──────────────────────────────────────────────
-    t_end = perf_counter_ns()
 
-    timing = Timing(
-        total_ms=duration_ms(t_start, t_end),
-        validate_ms=duration_ms(t_start, t_validate),
-        prechecks_ms=duration_ms(t_prechecks_start, t_prechecks_end),
-        analyzers_ms=analyzers_ms,
-        merge_ms=duration_ms(t_prechecks_end, t_merge_end),
-        ledger_ms=duration_ms(t_merge_end, t_ledger_end),
-        execute_ms=duration_ms(t_ledger_end, t_execute_end) if execution_result else None,
-    )
-
-    # HTTP status: 200 for ALLOW/DENY, 202 for ASK_HUMAN (§1.4.2)
-    from fastapi.responses import JSONResponse
-    http_status = 202 if api_verdict == Verdict.ASK_HUMAN else 200
-
-    decision = _build_decision(
-        action_id=new_action_id, run_id=run_id, seq=seq,
-        status=api_action_status, verdict=api_verdict, next_step_str=api_next_step.value,
-        reason_codes=reason_codes, risk_score=risk_score, findings=findings,
-        timing=timing,
-        ledger_idx=verdict_rec.idx, ledger_hash=verdict_rec.hash,
-        fingerprint=fingerprint, params_hash=params_hash,
-        approval=approval_summary, grant=grant_summary,
-        execution=execution_result,
-    )
-
-    return JSONResponse(status_code=http_status, content=decision)
-
-
-@router.get("/runs/{run_id}/actions/{action_id}")
-async def get_action(
-    run_id: str,
-    action_id: str,
-    request: Request,
-    wait_s: int = Query(default=0, ge=0, le=30),
-    role: str = require_role("agent", "admin"),
-) -> dict[str, Any]:
-    """Get action decision with optional long-poll. §1.4.2"""
-    repo = request.app.state.repo
-    action = await repo.find_action_by_client_id(run_id, action_id)
-    # Also try by action_id
-    if action is None:
-        cursor = await repo._db.execute(
-            "SELECT * FROM actions WHERE action_id=? AND run_id=?",
-            (action_id, run_id),
-        )
-        row = await cursor.fetchone()
-        if row:
-            action = dict(row)
-    if action is None:
-        raise AgentGuardError("ACTION_NOT_FOUND", f"Action {action_id} not found")
-
-    # TODO: long-poll for wait_s if status is PENDING_APPROVAL/EXECUTING
-
-    return {
-        "action_id": action["action_id"],
-        "run_id": run_id,
-        "seq": action["seq"],
-        "status": action["status"],
-        "verdict": action.get("verdict"),
-        "next_step": action.get("next_step"),
-        "reason_codes": json.loads(action.get("reason_codes_json", "[]")),
-        "risk_score": action.get("risk_score", 0),
-        "findings": json.loads(action.get("findings_json", "[]")),
-        "timing": {"total_ms": 0, "validate_ms": 0, "prechecks_ms": 0, "analyzers_ms": {}, "merge_ms": 0, "ledger_ms": 0},
-        "ledger_idx": action.get("ledger_idx_verdict", 0),
-        "ledger_hash": "",
-    }
-
-
-@router.get("/runs/{run_id}/actions")
-async def list_actions(
-    run_id: str,
-    request: Request,
-    after_seq: int = Query(default=0, ge=0),
-    limit: int = Query(default=100, ge=1, le=500),
-    role: str = require_role("agent", "admin"),
-) -> dict[str, Any]:
-    """List actions. §1.4.2"""
-    repo = request.app.state.repo
-    items = await repo.list_actions(run_id, after_seq=after_seq, limit=limit)
-    for item in items:
-        item["reason_codes"] = json.loads(item.get("reason_codes_json", "[]"))
-        item["findings"] = json.loads(item.get("findings_json", "[]"))
-    return {"items": items}
-
-
-def _build_decision(
-    *,
-    action_id: str,
-    run_id: str,
-    seq: int,
-    status: ActionStatus,
-    verdict: Verdict,
-    next_step_str: str,
-    reason_codes: list[str],
-    risk_score: int,
-    findings: list[Finding],
-    timing: Timing,
-    ledger_idx: int,
-    ledger_hash: str,
-    fingerprint: str = "",
-    params_hash: str = "",
-    approval: Any = None,
-    grant: Any = None,
-    execution: Any = None,
-    retry_after_ms: int | None = None,
-) -> dict[str, Any]:
-    """Build the ActionDecision response dict."""
-    result: dict[str, Any] = {
-        "action_id": action_id,
-        "run_id": run_id,
-        "seq": seq,
-        "status": status.value if isinstance(status, ActionStatus) else status,
-        "verdict": verdict.value if isinstance(verdict, Verdict) else verdict,
-        "next_step": next_step_str,
-        "retry_after_ms": retry_after_ms,
-        "reason_codes": reason_codes,
-        "risk_score": risk_score,
-        "findings": [f.model_dump(mode="json") if hasattr(f, "model_dump") else f for f in findings],
-        "approval": approval.model_dump(mode="json") if approval and hasattr(approval, "model_dump") else approval,
-        "grant": grant.model_dump(mode="json") if grant and hasattr(grant, "model_dump") else grant,
-        "execution": execution.model_dump(mode="json") if execution and hasattr(execution, "model_dump") else execution,
-        "timing": timing.model_dump(mode="json") if hasattr(timing, "model_dump") else timing,
-        "ledger_idx": ledger_idx,
-        "ledger_hash": ledger_hash,
-        "fingerprint": fingerprint,
-        "params_hash": params_hash,
-        "advisories": [],
-        "enforced": True,
-        "would_have_verdict": None,
-    }
-    return result
+    return execution_result
