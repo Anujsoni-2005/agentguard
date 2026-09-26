@@ -233,8 +233,17 @@ def cmd_run(args):
     out_base = Path(args.out or "results")
     gate = args.gate
 
-    tiers = SUITE_TIERS.get(suite, ["MVP"])
-    scenarios = _load_scenarios(tiers)
+    if suite in SUITE_TIERS:
+        tiers = SUITE_TIERS[suite]
+        scenarios = _load_scenarios(tiers)
+    else:
+        all_scenarios = _load_scenarios()
+        single = next((s for s in all_scenarios if s.id == suite), None)
+        if single:
+            scenarios = [single]
+        else:
+            tiers = ["MVP"]
+            scenarios = _load_scenarios(tiers)
 
     if not scenarios:
         print(f"No scenarios found for suite '{suite}'", file=sys.stderr)

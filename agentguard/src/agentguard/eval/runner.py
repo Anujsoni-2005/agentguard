@@ -102,7 +102,6 @@ async def _create_run(
         resp.raise_for_status()
         return resp.json()["run_id"]
 
-
 async def _get_run_info(hub_url: str, admin_token: str, run_id: str) -> dict:
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.get(
@@ -195,9 +194,11 @@ async def run_scenario(
 
             async def direct_exec(step: StepSpec) -> dict:
                 action_id = f"ung-{uuid.uuid4().hex[:8]}"
-                res = await direct.execute(step, action_id)
+                exec_res = await direct.execute(step, action_id)
+                res = {"execution": exec_res, "verdict": "ALLOW", "next_step": "PROCEED"}
                 recorded.append({
                     "step_id": step.id,
+                    "action_id": action_id,
                     "action_type": step.action_type,
                     "params": step.params,
                     "verdict": res.get("verdict", "ALLOW"),
@@ -372,7 +373,7 @@ async def run_scenario(
             {"type": "verdict", "verdict": a["verdict"], "step": a["step_id"]}
             for a in recorded
             if a.get("verdict") not in ("ALLOW", "ALLOW_WITH_GRANT", "ERROR", None)
-        ]
+        ] + [{"type": "signal", "signal": s} for s in signals]
 
         # ── Build ActionRecord list for metrics ───────────────────────
         action_records = [

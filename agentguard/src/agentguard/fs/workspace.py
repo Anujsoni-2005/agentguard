@@ -194,15 +194,21 @@ class WorkspaceManager:
                     try:
                         planted_honeytokens = plant_honeytokens(fd)
                         honeytoken_paths.extend([ht["path"] for ht in planted_honeytokens])
-                        # Register canaries logic would go here
                     finally:
                         os.close(fd)
                 except OSError:
                     pass
             else:
-                # If OS doesn't support it, plant_honeytokens handles fallback or fails
-                # Wait, honeytokens uses safeio which requires O_DIRECTORY. If it fails it fails.
-                pass
+                # Windows fallback
+                from agentguard.fs.honeytokens import generate_honeytokens
+                files, _ = generate_honeytokens()
+                for rel_path, (content, marker) in files.items():
+                    abs_path = os.path.join(scratch_dir, rel_path)
+                    os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+                    with open(abs_path, "wb") as f:
+                        f.write(content)
+                    planted_honeytokens.append({"path": rel_path, "marker": marker.decode('utf-8') if isinstance(marker, bytes) else marker})
+                    honeytoken_paths.append(rel_path)
 
         state = WorkspaceState(
             run_id=run_id,

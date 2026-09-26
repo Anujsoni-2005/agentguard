@@ -42,5 +42,6 @@ class CliAnalyzer(Analyzer):
             return parse_findings
             
         net_policy = getattr(ctx.policy, "net", None) or NetPolicy()
-        rule_findings = evaluate_rules(ir, self.policy, net_policy)
+        run_flags = getattr(ctx.run, "flags", {}) if ctx.run else {}
+        rule_findings = evaluate_rules(ir, self.policy, net_policy, run_flags=run_flags)
         return parse_findings + rule_findings

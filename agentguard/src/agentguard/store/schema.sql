@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS runs (
     ws_epoch INTEGER NOT NULL DEFAULT 0,
     outcome_verified INTEGER,
     breaker_json TEXT NOT NULL DEFAULT '{}',
-    pending_advisories_json TEXT NOT NULL DEFAULT '[]'
+    pending_advisories_json TEXT NOT NULL DEFAULT '[]',
+    flags_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status, created_at);
 

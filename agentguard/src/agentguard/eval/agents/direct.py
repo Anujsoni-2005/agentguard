@@ -21,12 +21,13 @@ class MockActionRecord:
         self.params = params
 
 class DirectExecutor:
-    def __init__(self, workspace_dir: str, run_id: str = "test"):
-        self.run_id = run_id
+    def __init__(self, workspace_dir: str, run_id: str = None):
+        import uuid
+        self.run_id = run_id if run_id else f"test-{uuid.uuid4().hex[:8]}"
         self.workspace_dir = workspace_dir
         self.docker_executor = DockerExecutor(workspace_dir=workspace_dir)
 
-        self.run = MockRun("eval-run")
+        self.run = MockRun(self.run_id)
         
     async def execute(self, step: StepSpec, action_id: str) -> Dict[str, Any]:
         action_type = step.action_type

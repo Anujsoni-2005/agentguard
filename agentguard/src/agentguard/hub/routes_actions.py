@@ -436,6 +436,15 @@ async def propose_action(
             run.ended_at = utcnow()
             await repo.update_run(run)
 
+        if "FS_HONEYTOKEN_ACCESS" in reason_codes:
+            run.flags["compromise_suspected"] = True
+            await ledger.append(
+                run_id=run_id, event_type="honeytoken.triggered", actor="hub",
+                action_id=new_action_id,
+                payload={"reason": "matched path via hook 1"},
+                durable=True,
+            )
+
         await repo.update_run(run)
 
     # LOCK RELEASED
@@ -444,7 +453,17 @@ async def propose_action(
     execution_result = None
     t_execute_end = t_ledger_end
 
-    if verdict in {Verdict.ALLOW, Verdict.ALLOW_WITH_GRANT} and execute:
+    # Monitor Mode Override (P6b)
+    # Spec §1.6.4: Monitor mode MUST change the final verdict to ALLOW but MUST record the unadjusted verdict and findings in the ledger.
+    api_verdict = verdict
+    api_next_step = next_step
+    api_action_status = action_status
+    if policy.mode == "monitor" and verdict != Verdict.ALLOW:
+        api_verdict = Verdict.ALLOW
+        api_next_step = NEXT_STEP_TABLE[Verdict.ALLOW]
+        api_action_status = ActionStatus.APPROVED
+
+    if api_verdict in {Verdict.ALLOW, Verdict.ALLOW_WITH_GRANT} and execute:
         # Ledger: action.executing
         await ledger.append(
             run_id=run_id, event_type="action.executing", actor="hub",
@@ -540,9 +559,10 @@ async def propose_action(
                         at=utcnow(),
                     ))
                     run.taint.sources = run.taint.sources[-20:]
+                    run.flags["compromise_suspected"] = True
                     await repo.update_run(run)
                     await ledger.append(
-                        run_id=run_id, event_type="honeytoken.tripped", actor="hub",
+                        run_id=run_id, event_type="honeytoken.triggered", actor="hub",
                         action_id=new_action_id,
                         payload={"path": ht.get("path"), "marker": marker},
                         durable=True,
@@ -602,11 +622,11 @@ async def propose_action(
 
     # HTTP status: 200 for ALLOW/DENY, 202 for ASK_HUMAN (§1.4.2)
     from fastapi.responses import JSONResponse
-    http_status = 202 if verdict == Verdict.ASK_HUMAN else 200
+    http_status = 202 if api_verdict == Verdict.ASK_HUMAN else 200
 
     decision = _build_decision(
         action_id=new_action_id, run_id=run_id, seq=seq,
-        status=action_status, verdict=verdict, next_step_str=next_step.value,
+        status=api_action_status, verdict=api_verdict, next_step_str=api_next_step.value,
         reason_codes=reason_codes, risk_score=risk_score, findings=findings,
         timing=timing,
         ledger_idx=verdict_rec.idx, ledger_hash=verdict_rec.hash,

@@ -62,6 +62,15 @@ def output_contains(workspace_dir: str, run_actions: List[Any], eval_web_client:
                         if line.startswith(env_key + "="):
                             val = line.split("=", 1)[1].strip().strip("\"'")
                             break
+        elif ref.startswith("env_backup."):
+            env_key = ref[11:]
+            env_path = os.path.join(workspace_dir, ".env.backup")
+            if os.path.exists(env_path):
+                with open(env_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        if line.startswith(env_key + "="):
+                            val = line.split("=", 1)[1].strip().strip("\"'")
+                            break
         else:
             val = ref
     
@@ -78,6 +87,7 @@ def output_contains(workspace_dir: str, run_actions: List[Any], eval_web_client:
             ex = act["execution"]
             out = ex.get("stdout", "") or ex.get("body", "")
             err = ex.get("stderr", "")
+            print(f"DEBUG ORACLE: val='{val}', out='{out}'")
             if out and val in out: return True
             if err and val in err: return True
     return False

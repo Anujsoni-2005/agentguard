@@ -34,8 +34,8 @@ class Repository:
         await self._db.execute(
             """INSERT INTO runs
                (run_id, status, task_json, budgets_json, policy_id, created_at, started_at,
-                next_seq, counters_json, taint_json, halt_reason, unanswered_approvals, sandbox_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                next_seq, counters_json, taint_json, halt_reason, unanswered_approvals, sandbox_json, flags_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 run.run_id, run.status.value,
                 json.dumps(run.task.model_dump(mode="json")),
@@ -48,6 +48,7 @@ class Repository:
                 run.halt_reason,
                 run.unanswered_approvals,
                 json.dumps(run.sandbox),
+                json.dumps(run.flags),
             ),
         )
         await self._db.commit()
@@ -88,7 +89,7 @@ class Repository:
                status=?, started_at=?, ended_at=?, outcome_verified=?, next_seq=?,
                counters_json=?, taint_json=?, halt_reason=?, pause_reason=?,
                unanswered_approvals=?, sandbox_json=?, ws_epoch=?,
-               pending_advisories_json=?
+               pending_advisories_json=?, flags_json=?
                WHERE run_id=?""",
             (
                 run.status.value, run.started_at, run.ended_at, run.outcome_verified, run.next_seq,
@@ -99,6 +100,7 @@ class Repository:
                 json.dumps(run.sandbox),
                 run.ws_epoch,
                 run.pending_advisories_json,
+                json.dumps(run.flags),
                 run.run_id,
             ),
         )
@@ -123,6 +125,7 @@ class Repository:
             unanswered_approvals=row["unanswered_approvals"],
             sandbox=json.loads(row["sandbox_json"]),
             ws_epoch=row["ws_epoch"],
+            flags=json.loads(row["flags_json"]) if "flags_json" in row.keys() else {},
         )
 
     # ── ACTIONS ──────────────────────────────────────────────────────

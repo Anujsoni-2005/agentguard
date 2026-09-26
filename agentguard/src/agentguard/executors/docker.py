@@ -39,10 +39,18 @@ class DockerExecutor(Executor):
         try:
             # Check if container exists, else create it
             try:
+                print(f"DEBUG CONTAINER NAME: {container_name}")
                 container = self.client.containers.get(container_name)
                 if container.status != "running":
                     container.start()
             except docker.errors.NotFound:
+                import os
+                def _to_docker_mount_path(path: str) -> str:
+                    abs_path = os.path.abspath(path)
+                    res = abs_path.replace("\\", "/")
+                    print(f"DEBUG MOUNT: {res}")
+                    return res
+
                 # 2.9.2 Container Hardening
                 container = self.client.containers.run(
                     "python:3.11",
@@ -56,7 +64,7 @@ class DockerExecutor(Executor):
                     security_opt=["no-new-privileges:true"],
                     read_only=True,
                     tmpfs={"/tmp": "size=256m,exec,mode=1777", "/home/agent": "size=64m,exec,mode=0700"},
-                    volumes={self.workspace_dir: {"bind": "/workspace", "mode": "rw"}},
+                    volumes={_to_docker_mount_path(self.workspace_dir): {"bind": "/workspace", "mode": "rw"}},
                     working_dir="/workspace",
                     pids_limit=128,
                     mem_limit="512m",

@@ -6,7 +6,49 @@ from .ir import CommandIR, SimpleCmd, CliPolicy
 from agentguard.net.models import NetPolicy
 from agentguard.net.analyzer import evaluate_url
 
-def evaluate_rules(ir: CommandIR, policy: CliPolicy, net_policy: Optional[NetPolicy] = None) -> List[Finding]:
+def _check_honeytokens(ir: CommandIR, run_flags: dict, execution_stdout: str | None = None) -> List[Finding]:
+    """CLI-032: honeytoken access — always DENY, never a soft ask."""
+    honeytokens = run_flags.get("honeytokens", []) if run_flags else []
+    if not honeytokens:
+        return []
+
+    findings = []
+    hit_paths = set()
+
+    # Hook 1: pre-execution path match (any argv value matching a planted path)
+    for cmd in ir.commands:
+        for arg in getattr(cmd, "argv", []):
+            arg_text = arg.text if hasattr(arg, "text") else str(arg)
+            normalized = arg_text
+            if normalized.startswith("./"):
+                normalized = normalized[2:]
+            elif normalized.startswith("/"):
+                normalized = normalized[1:]
+            print(f"DEBUG HT: normalized={normalized}, hts={[h.get('path') for h in honeytokens]}")
+            for ht in honeytokens:
+                ht_path = ht.get("path", "")
+                ht_norm = ht_path.lstrip("/").removeprefix("./")
+                if normalized == ht_norm or normalized.endswith("/" + ht_norm):
+                    print(f"DEBUG HT: Match! {ht_path}")
+                    hit_paths.add(ht_path)
+
+    # Hook 2 (Prismor-style fallback): post-execution marker scan in stdout,
+    # catches indirect/obfuscated reads the path check misses
+    if execution_stdout:
+        for ht in honeytokens:
+            marker = ht.get("marker", "")
+            if marker and marker in execution_stdout:
+                hit_paths.add(ht.get("path", "<unknown>"))
+
+    if hit_paths:
+        findings.append(Finding(
+            finding_id=gen_finding_id(), source="cli", rule_id="CLI-032",
+            reason_code="FS_HONEYTOKEN_ACCESS", severity=95, verdict_hint="DENY",
+            message=f"Access to a planted decoy secret ({', '.join(sorted(hit_paths))}) — compromise indicator",
+        ))
+    return findings
+
+def evaluate_rules(ir: CommandIR, policy: CliPolicy, net_policy: Optional[NetPolicy] = None, run_flags: Optional[dict] = None) -> List[Finding]:
     findings = []
     if not ir.parse_ok:
         # Covered in prechecks / parser
@@ -15,6 +57,7 @@ def evaluate_rules(ir: CommandIR, policy: CliPolicy, net_policy: Optional[NetPol
     for cmd in ir.commands:
         findings.extend(_evaluate_cmd(cmd, policy, ir, net_policy))
         
+    findings.extend(_check_honeytokens(ir, run_flags or {}))
     return findings
 
 def _evaluate_cmd(cmd: SimpleCmd, policy: CliPolicy, ir: CommandIR, net_policy: Optional[NetPolicy]) -> List[Finding]:
